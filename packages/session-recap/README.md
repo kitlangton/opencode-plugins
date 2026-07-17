@@ -4,7 +4,7 @@ Generates a transient, read-only recap of the current OpenCode V2 session.
 
 ## Install
 
-Add the package to `opencode.jsonc`:
+Add the package to `opencode.jsonc`, then restart OpenCode:
 
 ```jsonc
 {
