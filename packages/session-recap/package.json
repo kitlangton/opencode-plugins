@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@kitlangton/opencode-session-recap",
+  "version": "0.1.0",
+  "description": "Transient session recaps for the OpenCode V2 TUI",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kitlangton/opencode-plugins.git",
+    "directory": "packages/session-recap"
+  },
+  "homepage": "https://github.com/kitlangton/opencode-plugins/tree/main/packages/session-recap",
+  "bugs": "https://github.com/kitlangton/opencode-plugins/issues",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "recap"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "bun run typecheck && bun run test",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "next",
+    "@opentui/solid": "0.4.5",
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "1.0.9"
+  }
+}
