@@ -1,28 +1,31 @@
 # OpenCode Plugins
 
-Personal OpenCode V2 plugins.
+Plugins for the [OpenCode](https://opencode.ai) V2 TUI.
 
 ## Plugins
 
-- [`@kitlangton/opencode-session-recap`](./packages/session-recap): transient session recaps above the composer.
+### [`@kitlangton/opencode-session-recap`](./packages/session-recap)
 
-Each plugin is independently versioned and published to npm.
+Shows a one-sentence recap of your session above the composer, so you can remember where you left off after stepping away.
 
-## Publish
-
-```bash
-npm login --auth-type=web
-bun run release
-```
-
-## Share
-
-Coworkers add the package to `opencode.jsonc`:
+- `/recap` or the command palette generates one on demand.
+- After three user turns, leaving the terminal unfocused for three minutes generates one automatically.
+- New input dismisses it. Generation is read-only and never touches session history.
 
 ```jsonc
+// opencode.jsonc
 {
-  "plugins": ["@kitlangton/opencode-session-recap"]
+  "plugins": ["@kitlangton/opencode-session-recap"],
 }
 ```
 
-Restart OpenCode after changing the plugin list. Requires an OpenCode V2 `next` release containing `session.generate` and `session.composer.top`.
+## Release
+
+Add a changeset, push to `main`, then merge the release PR that CI opens:
+
+```bash
+bun run changeset
+git push
+```
+
+Publishing runs in GitHub Actions through npm trusted publishing (OIDC). No tokens, no OTP.
