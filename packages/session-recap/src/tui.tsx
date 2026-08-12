@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Plugin } from "@opencode-ai/plugin/v2/tui";
+import { Plugin } from "@opencode-ai/plugin/tui";
 import { useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { AUTO_RECAP_AWAY_MS, automaticRecapEligible } from "./eligibility";
@@ -199,10 +199,11 @@ function Recap(props: { context: Plugin.Context; sessionID: string }) {
 }
 
 export default Plugin.define({
-  id: "kitlangton.session-recap",
+  id: "kit.session-recap",
   setup(context) {
-    context.ui.slot("session.composer.top", (props) => (
-      <Recap context={context} sessionID={String(props.sessionID)} />
-    ));
+    context.ui.slot({
+      append: "session.composer.top",
+      render: (props) => <Recap context={context} sessionID={props.sessionID} />,
+    });
   },
 });

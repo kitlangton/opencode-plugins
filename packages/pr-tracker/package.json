@@ -1,26 +1,25 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@kitlangton/opencode-session-recap",
-  "version": "0.1.1",
-  "description": "Transient session recaps for the OpenCode V2 TUI",
+  "name": "@kitlangton/opencode-pr-tracker",
+  "version": "0.0.0",
+  "description": "Session-aware pull request tracking for the OpenCode V2 TUI",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kitlangton/opencode-plugins.git",
-    "directory": "packages/session-recap"
+    "directory": "packages/pr-tracker"
   },
-  "homepage": "https://github.com/kitlangton/opencode-plugins/tree/main/packages/session-recap",
+  "homepage": "https://github.com/kitlangton/opencode-plugins/tree/main/packages/pr-tracker",
   "bugs": "https://github.com/kitlangton/opencode-plugins/issues",
   "keywords": [
     "opencode",
     "opencode-plugin",
     "tui",
-    "recap"
+    "github",
+    "pull-request"
   ],
-  "exports": {
-    ".": "./dist/index.js"
-  },
+  "exports": "./dist/index.js",
   "files": [
     "dist",
     "README.md"
@@ -30,10 +29,9 @@
   },
   "scripts": {
     "build": "bun ../../scripts/build.ts .",
-    "check": "bun run typecheck && bun run test",
+    "check": "bun run typecheck",
     "prepack": "bun run build",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-next-17271"
