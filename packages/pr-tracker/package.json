@@ -34,11 +34,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "0.0.0-next-17271"
+    "@opencode-ai/plugin": "0.0.0-next-17271",
+    "@opentui/core": "0.0.0-20260808-9ecf7c0a",
+    "solid-js": "1.9.14"
   },
   "devDependencies": {
     "@tsconfig/bun": "1.0.9",
-    "@opentui/solid": "0.5.1",
-    "solid-js": "1.9.14"
+    "@opentui/solid": "0.5.1"
   }
 }

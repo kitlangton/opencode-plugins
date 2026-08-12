@@ -35,3 +35,21 @@ test("requires activity after the previous automatic recap", () => {
     }),
   ).toBe(true);
 });
+
+test("does not repeat for an unchanged session after dismissal", () => {
+  const userIDs = ["one", "two", "three"];
+  expect(
+    automaticRecapEligible({
+      awayMs: 180_000,
+      userIDs,
+      lastAutomaticUserID: userIDs.at(-1),
+    }),
+  ).toBe(false);
+  expect(
+    automaticRecapEligible({
+      awayMs: 360_000,
+      userIDs,
+      lastAutomaticUserID: userIDs.at(-1),
+    }),
+  ).toBe(false);
+});

@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { Plugin } from "@opencode-ai/plugin/tui"
+import { createSignal } from "solid-js"
 
 const POLL_MS = 45_000
 
@@ -108,6 +109,30 @@ function statusColor(pr: Pr) {
 
 function changed(left: Pr | undefined, right: Pr | undefined) {
   return JSON.stringify(left) !== JSON.stringify(right)
+}
+
+function PrRow(props: { context: Plugin.Context; pr: Pr }) {
+  const [hovered, setHovered] = createSignal(false)
+  return (
+    <box
+      flexDirection="row"
+      gap={1}
+      backgroundColor={hovered() ? props.context.theme.background.action.primary.hovered : undefined}
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
+      onMouseUp={() => Bun.spawn(["open", props.pr.url])}
+    >
+      <text fg={statusColor(props.pr)} flexShrink={0}>
+        {statusIcon(props.pr)}
+      </text>
+      <text fg={props.context.theme.text.default} wrapMode="word">
+        <span style={{ fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued }}>
+          #{props.pr.number}
+        </span>{" "}
+        {props.pr.title}
+      </text>
+    </box>
+  )
 }
 
 export default Plugin.define({
@@ -218,17 +243,28 @@ export default Plugin.define({
 
     context.ui.slot({
       after: "prompt.footer.file",
-      render: () => (
-        <text
-          fg={state.current ? statusColor(state.current) : undefined}
-          flexShrink={0}
-          onMouseUp={() => {
-            if (state.current) Bun.spawn(["open", state.current.url], { stdout: "ignore", stderr: "ignore" })
-          }}
-        >
-          {state.current ? `#${state.current.number}` : ""}
-        </text>
-      ),
+      render: () => {
+        const [hovered, setHovered] = createSignal(false)
+        return (
+          <text
+            fg={
+              hovered() && state.current
+                ? context.theme.text.action.primary.hovered
+                : state.current
+                  ? statusColor(state.current)
+                  : undefined
+            }
+            flexShrink={0}
+            onMouseOver={() => setHovered(true)}
+            onMouseOut={() => setHovered(false)}
+            onMouseUp={() => {
+              if (state.current) Bun.spawn(["open", state.current.url], { stdout: "ignore", stderr: "ignore" })
+            }}
+          >
+            {state.current ? `#${state.current.number}` : ""}
+          </text>
+        )
+      },
     })
 
     context.ui.slot({
@@ -253,16 +289,7 @@ export default Plugin.define({
                 <text fg={context.theme.text.default}>
                   <b>Pull requests</b>
                 </text>
-                {list().map((pr) => (
-                  <box flexDirection="row" gap={1} onMouseUp={() => Bun.spawn(["open", pr.url])}>
-                    <text fg={statusColor(pr)} flexShrink={0}>
-                      {statusIcon(pr)}
-                    </text>
-                    <text fg={context.theme.text.default} wrapMode="word">
-                      <span style={{ fg: context.theme.text.subdued }}>#{pr.number}</span> {pr.title}
-                    </text>
-                  </box>
-                ))}
+                {list().map((pr) => <PrRow context={context} pr={pr} />)}
               </box>
             ) : undefined}
           </>
