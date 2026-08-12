@@ -142,7 +142,6 @@ export default Plugin.define({
     if (!directory) return
     const [state, update] = context.storage.memory("pr-sidebar-v2", {
       initial: {
-        current: undefined as Pr | undefined,
         roots: {} as Record<string, string[]>,
         prs: {} as Record<string, Pr>,
       },
@@ -189,20 +188,10 @@ export default Plugin.define({
       if (disposed || inFlight) return
       inFlight = true
       try {
-        const branch = context.data.location.vcs.info(context.location)?.branch.current
-        const candidate = branch ? await fetchPr(directory) : undefined
-        const current =
-          candidate?.state === "OPEN" ||
-          (candidate?.state === "MERGED" &&
-            candidate.mergedAt &&
-            Date.now() - Date.parse(candidate.mergedAt) < 60 * 60_000)
-            ? candidate
-            : undefined
-        const urls = (state.roots[activeRoot] ?? []).filter((url) => url !== current?.url)
+        const urls = state.roots[activeRoot] ?? []
         const prs = (await Promise.all(urls.map((url) => fetchPr(directory, url)))).filter((pr) => pr !== undefined)
-        if (disposed || (!changed(state.current, current) && !prs.some((pr) => changed(state.prs[pr.url], pr)))) return
+        if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
         update((draft) => {
-          draft.current = current
           for (const pr of prs) draft.prs[pr.url] = pr
         })
       } finally {
@@ -238,34 +227,7 @@ export default Plugin.define({
           ),
         )
       }),
-      context.data.on("vcs.branch.updated", () => void refresh()),
     ]
-
-    context.ui.slot({
-      after: "prompt.footer.file",
-      render: () => {
-        const [hovered, setHovered] = createSignal(false)
-        return (
-          <text
-            fg={
-              hovered() && state.current
-                ? context.theme.text.action.primary.hovered
-                : state.current
-                  ? statusColor(state.current)
-                  : undefined
-            }
-            flexShrink={0}
-            onMouseOver={() => setHovered(true)}
-            onMouseOut={() => setHovered(false)}
-            onMouseUp={() => {
-              if (state.current) Bun.spawn(["open", state.current.url], { stdout: "ignore", stderr: "ignore" })
-            }}
-          >
-            {state.current ? `#${state.current.number}` : ""}
-          </text>
-        )
-      },
-    })
 
     context.ui.slot({
       append: "sidebar.content",
@@ -275,7 +237,6 @@ export default Plugin.define({
         const list = () => {
           const urls = state.roots[context.data.session.root(props.sessionID)] ?? []
           const prs = new Map<string, Pr>()
-          if (state.current) prs.set(state.current.url, state.current)
           for (const url of urls) {
             const pr = state.prs[url]
             if (pr) prs.set(url, pr)
