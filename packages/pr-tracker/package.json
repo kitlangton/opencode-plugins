@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@kitlangton/opencode-pr-tracker",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Session-aware pull request tracking for the OpenCode V2 TUI",
   "type": "module",
   "license": "MIT",
