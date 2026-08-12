@@ -16,7 +16,6 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 type Recap = {
   text?: string;
   loading?: boolean;
-  handledUserID?: string;
 };
 
 type RecapState = {
@@ -24,8 +23,16 @@ type RecapState = {
 };
 
 type Update = (mutate: (draft: RecapState) => void) => void;
+type HandledState = { sessions: Record<string, string> };
+type UpdateHandled = (mutate: (draft: HandledState) => void) => Promise<void>;
 
-function Controller(props: { context: Plugin.Context; state: RecapState; update: Update }) {
+function Controller(props: {
+  context: Plugin.Context;
+  state: RecapState;
+  update: Update;
+  handled: HandledState;
+  updateHandled: UpdateHandled;
+}) {
   const requests = new Map<string, AbortController>();
   const away = new Map<string, { since: number; timer: ReturnType<typeof setTimeout> }>();
   const [focused, setFocused] = createSignal(true);
@@ -48,13 +55,13 @@ function Controller(props: { context: Plugin.Context; state: RecapState; update:
     requests.get(sessionID)?.abort();
     requests.delete(sessionID);
     props.update((draft) => {
-      const handledUserID = markHandled ? users(sessionID).at(-1)?.id : draft.sessions[sessionID]?.handledUserID;
-      if (!handledUserID) {
-        delete draft.sessions[sessionID];
-        return;
-      }
-      draft.sessions[sessionID] = { handledUserID };
+      delete draft.sessions[sessionID];
     });
+    const handledUserID = markHandled ? users(sessionID).at(-1)?.id : undefined;
+    if (handledUserID)
+      void props.updateHandled((draft) => {
+        draft.sessions[sessionID] = handledUserID;
+      });
   };
 
   const generate = (sessionID: string) => {
@@ -74,8 +81,11 @@ function Controller(props: { context: Plugin.Context; state: RecapState; update:
         setRecap(sessionID, {
           text: text || undefined,
           loading: false,
-          handledUserID: text ? latest.id : props.state.sessions[sessionID]?.handledUserID,
         });
+        if (text)
+          void props.updateHandled((draft) => {
+            draft.sessions[sessionID] = latest.id;
+          });
       })
       .catch(() => {
         if (requests.get(sessionID) !== request) return;
@@ -92,7 +102,7 @@ function Controller(props: { context: Plugin.Context; state: RecapState; update:
       !automaticRecapEligible({
         awayMs,
         userIDs: users(sessionID).map((message) => message.id),
-        lastAutomaticUserID: props.state.sessions[sessionID]?.handledUserID,
+        lastAutomaticUserID: props.handled.sessions[sessionID],
       })
     )
       return;
@@ -236,7 +246,21 @@ export default Plugin.define({
     const [state, update] = context.storage.memory("recaps-v2", {
       initial: { sessions: {} as Record<string, Recap> },
     });
-    context.ui.slot({ append: "app", render: () => <Controller context={context} state={state} update={update} /> });
+    const [handled, updateHandled] = context.storage.store("recap-handled-v1", {
+      initial: { sessions: {} as Record<string, string> },
+    });
+    context.ui.slot({
+      append: "app",
+      render: () => (
+        <Controller
+          context={context}
+          state={state}
+          update={update}
+          handled={handled}
+          updateHandled={updateHandled}
+        />
+      ),
+    });
     context.ui.slot({
       append: "session.composer.top",
       render: (props) => (

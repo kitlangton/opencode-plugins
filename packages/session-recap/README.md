@@ -32,3 +32,4 @@ Requires an OpenCode V2 `next` release with `session.generate` and the `session.
 
 Generation is read-only: it uses your session's model and history for one side request, and nothing enters the transcript.
 Recaps and in-flight generation survive navigation between tabs for the lifetime of the TUI process.
+The latest recapped user message is persisted across TUI restarts, so reopening an unchanged session does not generate another recap. A new user message is required before automatic generation becomes eligible again.
