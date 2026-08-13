@@ -12,6 +12,7 @@ const RECAP_PROMPT = [
 ].join(" ");
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const RECAP_TIMEOUT_MS = 60_000;
 
 type Recap = {
   text?: string;
@@ -65,16 +66,18 @@ function Controller(props: {
   };
 
   const generate = (sessionID: string) => {
+    if (props.context.data.session.get(sessionID)?.parentID) return;
     const latest = users(sessionID).at(-1);
     if (!latest) return;
     requests.get(sessionID)?.abort();
     const request = new AbortController();
     requests.set(sessionID, request);
     setRecap(sessionID, { loading: true });
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(RECAP_TIMEOUT_MS)]);
 
     void props.context.client.session
-      .wait({ sessionID }, { signal: request.signal })
-      .then(() => props.context.client.session.generate({ sessionID, prompt: RECAP_PROMPT }, { signal: request.signal }))
+      .wait({ sessionID }, { signal })
+      .then(() => props.context.client.session.generate({ sessionID, prompt: RECAP_PROMPT }, { signal }))
       .then((response) => {
         if (requests.get(sessionID) !== request) return;
         const text = response.text.trim().replaceAll(/\s+/g, " ");
@@ -163,7 +166,12 @@ function Controller(props: {
           group: "Session",
           palette: true,
           slash: { name: "recap" },
-          enabled: Boolean(sessionID && users(sessionID).length > 0 && !props.state.sessions[sessionID]?.loading),
+          enabled: Boolean(
+            sessionID &&
+              !props.context.data.session.get(sessionID)?.parentID &&
+              users(sessionID).length > 0 &&
+              !props.state.sessions[sessionID]?.loading,
+          ),
           run: () => {
             if (sessionID) generate(sessionID);
           },

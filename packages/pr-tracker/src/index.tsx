@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 
 import { Plugin } from "@opencode-ai/plugin/tui"
-import { createSignal } from "solid-js"
+import { createEffect, createSignal, untrack } from "solid-js"
 
-const POLL_MS = 45_000
+const STALE_MS = 15_000
 
 const COLORS: Record<string, string> = {
   OPEN: "#a6da95",
@@ -147,10 +147,21 @@ export default Plugin.define({
       },
     })
 
-    const recovered = new Set<string>()
-    let activeRoot = ""
     let disposed = false
-    let inFlight = false
+    const checkedAt = new Map<string, number>()
+    const inFlight = new Map<string, Promise<Pr | undefined>>()
+
+    const load = (url: string, staleOnly: boolean) => {
+      if (staleOnly && Date.now() - (checkedAt.get(url) ?? 0) < STALE_MS) return Promise.resolve(state.prs[url])
+      const active = inFlight.get(url)
+      if (active) return active
+      const request = fetchPr(directory, url).finally(() => {
+        checkedAt.set(url, Date.now())
+        inFlight.delete(url)
+      })
+      inFlight.set(url, request)
+      return request
+    }
 
     const adopt = async (sessionID: string, urls: string[]) => {
       if (disposed || urls.length === 0) return
@@ -162,7 +173,7 @@ export default Plugin.define({
           draft.roots[root] = next
         })
       const missing = urls.filter((url) => !state.prs[url])
-      const prs = (await Promise.all(missing.map((url) => fetchPr(directory, url)))).filter((pr) => pr !== undefined)
+      const prs = (await Promise.all(missing.map((url) => load(url, false)))).filter((pr) => pr !== undefined)
       if (disposed || prs.length === 0) return
       if (prs.some((pr) => changed(state.prs[pr.url], pr)))
         update((draft) => {
@@ -170,37 +181,17 @@ export default Plugin.define({
         })
     }
 
-    const recover = (sessionID: string) => {
-      const root = context.data.session.root(sessionID)
-      if (recovered.has(root)) return
-      recovered.add(root)
-      void adopt(
-        root,
-        createdPrUrls(
-          [...new Set([root, ...context.data.session.family(root)])].flatMap((member) =>
-            context.data.session.message.list(member),
-          ),
-        ),
+    const refresh = async (root: string) => {
+      if (disposed) return
+      const prs = (await Promise.all((state.roots[root] ?? []).map((url) => load(url, true)))).filter(
+        (pr) => pr !== undefined,
       )
+      if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
+      update((draft) => {
+        for (const pr of prs) draft.prs[pr.url] = pr
+      })
     }
 
-    const refresh = async () => {
-      if (disposed || inFlight) return
-      inFlight = true
-      try {
-        const urls = state.roots[activeRoot] ?? []
-        const prs = (await Promise.all(urls.map((url) => fetchPr(directory, url)))).filter((pr) => pr !== undefined)
-        if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
-        update((draft) => {
-          for (const pr of prs) draft.prs[pr.url] = pr
-        })
-      } finally {
-        inFlight = false
-      }
-    }
-
-    void refresh()
-    const timer = setInterval(() => void refresh(), POLL_MS)
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
         if (event.data.shell.status !== "exited" || event.data.shell.exit !== 0) return
@@ -232,10 +223,23 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: (props) => {
-        activeRoot = context.data.session.root(props.sessionID)
-        recover(props.sessionID)
+        // Slot props update reactively without remounting: re-derive the root
+        // and re-run recovery/refresh whenever the visible session changes.
+        const root = () => context.data.session.root(props.sessionID)
+        createEffect(() => {
+          const currentRoot = root()
+          const urls = createdPrUrls(
+            [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
+              context.data.session.message.list(member),
+            ),
+          )
+          untrack(() => {
+            void adopt(currentRoot, urls)
+            void refresh(currentRoot)
+          })
+        })
         const list = () => {
-          const urls = state.roots[context.data.session.root(props.sessionID)] ?? []
+          const urls = state.roots[root()] ?? []
           const prs = new Map<string, Pr>()
           for (const url of urls) {
             const pr = state.prs[url]
@@ -261,7 +265,6 @@ export default Plugin.define({
     return () => {
       disposed = true
       for (const unsubscribe of unsubscribers) unsubscribe()
-      clearInterval(timer)
     }
   },
 })
