@@ -2,6 +2,7 @@
 
 import { Plugin } from "@opencode-ai/plugin/tui"
 import { createEffect, createSignal, untrack } from "solid-js"
+import { prReferences } from "./reference"
 
 const STALE_MS = 15_000
 
@@ -45,14 +46,10 @@ async function fetchPr(directory: string, reference?: string): Promise<Pr | unde
   return typeof pr.number === "number" && typeof pr.url === "string" ? pr : undefined
 }
 
-function prUrls(command: unknown, output: unknown) {
-  if (typeof command !== "string" || !/\bgh\s+pr\s+create\b/.test(command) || typeof output !== "string") return []
-  return [...output.matchAll(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g)].map((match) => match[0])
-}
-
-function createdPrUrls(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
-  const urls = new Set<string>()
-  const adopt = (command: unknown, output: unknown) => prUrls(command, output).forEach((url) => urls.add(url))
+function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
+  const references = new Set<string | undefined>()
+  const adopt = (command: unknown, output: unknown) =>
+    prReferences(command, output).forEach((reference) => references.add(reference))
 
   for (const message of messages) {
     if (message.type === "shell") {
@@ -71,7 +68,7 @@ function createdPrUrls(messages: ReturnType<Plugin.Context["data"]["session"]["m
       )
     }
   }
-  return [...urls]
+  return [...references]
 }
 
 function checkStatus(pr: Pr) {
@@ -126,7 +123,11 @@ function PrRow(props: { context: Plugin.Context; pr: Pr }) {
         {statusIcon(props.pr)}
       </text>
       <text fg={props.context.theme.text.default} wrapMode="word">
-        <span style={{ fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued }}>
+        <span
+          style={{
+            fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued,
+          }}
+        >
           #{props.pr.number}
         </span>{" "}
         {props.pr.title}
@@ -148,8 +149,22 @@ export default Plugin.define({
     })
 
     let disposed = false
+    const recovered = new Set<string>()
     const checkedAt = new Map<string, number>()
     const inFlight = new Map<string, Promise<Pr | undefined>>()
+    const [current, setCurrent] = createSignal<Pr>()
+    let currentCheckedAt = 0
+    let currentInFlight: Promise<Pr | undefined> | undefined
+
+    const fetchCurrent = (staleOnly: boolean) => {
+      if (staleOnly && Date.now() - currentCheckedAt < STALE_MS) return Promise.resolve(current())
+      if (currentInFlight) return currentInFlight
+      currentInFlight = fetchPr(directory).finally(() => {
+        currentCheckedAt = Date.now()
+        currentInFlight = undefined
+      })
+      return currentInFlight
+    }
 
     const load = (url: string, staleOnly: boolean) => {
       if (staleOnly && Date.now() - (checkedAt.get(url) ?? 0) < STALE_MS) return Promise.resolve(state.prs[url])
@@ -163,22 +178,34 @@ export default Plugin.define({
       return request
     }
 
-    const adopt = async (sessionID: string, urls: string[]) => {
-      if (disposed || urls.length === 0) return
+    const adopt = async (sessionID: string, references: Array<string | undefined>, staleOnly = false) => {
+      if (disposed || references.length === 0) return
+      const prs = (
+        await Promise.all(
+          references.map((reference) =>
+            reference === undefined
+              ? fetchCurrent(staleOnly)
+              : staleOnly && state.prs[reference]
+                ? load(reference, true)
+                : fetchPr(directory, reference),
+          ),
+        )
+      ).filter((pr) => pr !== undefined)
+      if (disposed || prs.length === 0) return
       const root = context.data.session.root(sessionID)
       const previous = state.roots[root] ?? []
-      const next = [...new Set([...previous, ...urls])]
-      if (next.length !== previous.length)
+      const next = [...new Set([...previous, ...prs.map((pr) => pr.url)])]
+      if (next.length !== previous.length || prs.some((pr) => changed(state.prs[pr.url], pr)))
         update((draft) => {
           draft.roots[root] = next
-        })
-      const missing = urls.filter((url) => !state.prs[url])
-      const prs = (await Promise.all(missing.map((url) => load(url, false)))).filter((pr) => pr !== undefined)
-      if (disposed || prs.length === 0) return
-      if (prs.some((pr) => changed(state.prs[pr.url], pr)))
-        update((draft) => {
           for (const pr of prs) draft.prs[pr.url] = pr
         })
+    }
+
+    const refreshCurrent = async () => {
+      if (disposed) return
+      const pr = await fetchCurrent(true)
+      if (!disposed && changed(current(), pr)) setCurrent(pr)
     }
 
     const refresh = async (root: string) => {
@@ -195,7 +222,7 @@ export default Plugin.define({
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
         if (event.data.shell.status !== "exited" || event.data.shell.exit !== 0) return
-        void adopt(event.data.sessionID, prUrls(event.data.shell.command, event.data.output.output))
+        void adopt(event.data.sessionID, prReferences(event.data.shell.command, event.data.output.output))
       }),
       context.data.on("session.tool.success", (event) => {
         const message = context.data.session.message.get(event.data.sessionID, event.data.assistantMessageID)
@@ -209,7 +236,7 @@ export default Plugin.define({
             : undefined
         void adopt(
           event.data.sessionID,
-          prUrls(
+          prReferences(
             command,
             event.data.content
               .filter((item) => item.type === "text")
@@ -223,27 +250,33 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: (props) => {
-        // Slot props update reactively without remounting: re-derive the root
-        // and re-run recovery/refresh whenever the visible session changes.
         const root = () => context.data.session.root(props.sessionID)
         createEffect(() => {
           const currentRoot = root()
-          const urls = createdPrUrls(
-            [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
-              context.data.session.message.list(member),
-            ),
-          )
           untrack(() => {
-            void adopt(currentRoot, urls)
+            void refreshCurrent()
             void refresh(currentRoot)
+            if (recovered.has(currentRoot)) return
+            recovered.add(currentRoot)
+            void adopt(
+              currentRoot,
+              createdPrReferences(
+                [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
+                  context.data.session.message.list(member),
+                ),
+              ),
+              true,
+            )
           })
         })
         const list = () => {
           const urls = state.roots[root()] ?? []
           const prs = new Map<string, Pr>()
+          const branch = current()
+          if (branch?.state === "OPEN") prs.set(branch.url, branch)
           for (const url of urls) {
             const pr = state.prs[url]
-            if (pr) prs.set(url, pr)
+            if (pr?.state === "OPEN") prs.set(url, pr)
           }
           return [...prs.values()]
         }
@@ -254,7 +287,9 @@ export default Plugin.define({
                 <text fg={context.theme.text.default}>
                   <b>Pull requests</b>
                 </text>
-                {list().map((pr) => <PrRow context={context} pr={pr} />)}
+                {list().map((pr) => (
+                  <PrRow context={context} pr={pr} />
+                ))}
               </box>
             ) : undefined}
           </>
