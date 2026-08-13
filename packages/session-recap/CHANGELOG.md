@@ -1,5 +1,11 @@
 # @kitlangton/opencode-session-recap
 
+## 0.1.3
+
+### Patch Changes
+
+- adb52e7: Stop recap generation after a timeout and skip recaps for sub-agent sessions.
+
 ## 0.1.2
 
 ### Patch Changes

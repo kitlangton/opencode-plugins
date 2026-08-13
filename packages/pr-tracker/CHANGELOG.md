@@ -1,5 +1,15 @@
 # @kitlangton/opencode-pr-tracker
 
+## 0.2.0
+
+### Minor Changes
+
+- e33cc20: Discover the checked-out branch's pull request and track pull requests changed through `gh pr edit` or `gh api`.
+
+### Patch Changes
+
+- adb52e7: Recover pull requests after session messages hydrate and revalidate stale status when returning to a session tab.
+
 ## 0.1.1
 
 ### Patch Changes
