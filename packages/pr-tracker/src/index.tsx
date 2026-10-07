@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { Plugin } from "@opencode-ai/plugin/tui"
+import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, createSignal, untrack } from "solid-js"
 import { prReferences } from "./reference"
 
@@ -46,6 +46,12 @@ async function fetchPr(directory: string, reference?: string): Promise<Pr | unde
   return typeof pr.number === "number" && typeof pr.url === "string" ? pr : undefined
 }
 
+function inputCommand(input: unknown) {
+  return typeof input === "object" && input !== null && !Array.isArray(input) && "command" in input
+    ? input.command
+    : undefined
+}
+
 function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
   const references = new Set<string | undefined>()
   const adopt = (command: unknown, output: unknown) =>
@@ -60,7 +66,7 @@ function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["sessio
     for (const part of message.content) {
       if (part.type !== "tool" || part.state.status !== "completed") continue
       adopt(
-        part.state.input.command,
+        inputCommand(part.state.input),
         part.state.content
           .filter((item) => item.type === "text")
           .map((item) => item.text)
@@ -122,10 +128,10 @@ function PrRow(props: { context: Plugin.Context; pr: Pr }) {
       <text fg={statusColor(props.pr)} flexShrink={0}>
         {statusIcon(props.pr)}
       </text>
-      <text fg={props.context.theme.text.default} wrapMode="word">
+      <text fg={props.context.theme.text.base} wrapMode="word">
         <span
           style={{
-            fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued,
+            fg: hovered() ? props.context.theme.text.base : props.context.theme.text.muted,
           }}
         >
           #{props.pr.number}
@@ -139,12 +145,14 @@ function PrRow(props: { context: Plugin.Context; pr: Pr }) {
 export default Plugin.define({
   id: "kit.pr-tracker",
   setup: async (context) => {
-    const directory = context.location?.directory
-    if (!directory) return
+    const location = context.location ?? context.data.location.default()
+    const sessionDirectory = (sessionID: string) =>
+      context.data.session.get(sessionID)?.location.directory ?? location.directory
     const [state, update] = context.storage.memory("pr-sidebar-v2", {
       initial: {
         roots: {} as Record<string, string[]>,
         prs: {} as Record<string, Pr>,
+        directories: {} as Record<string, string>,
       },
     })
 
@@ -152,21 +160,24 @@ export default Plugin.define({
     const recovered = new Set<string>()
     const checkedAt = new Map<string, number>()
     const inFlight = new Map<string, Promise<Pr | undefined>>()
-    const [current, setCurrent] = createSignal<Pr>()
-    let currentCheckedAt = 0
-    let currentInFlight: Promise<Pr | undefined> | undefined
+    const [current, setCurrent] = createSignal<Record<string, Pr | undefined>>({})
+    const currentCheckedAt = new Map<string, number>()
+    const currentInFlight = new Map<string, Promise<Pr | undefined>>()
 
-    const fetchCurrent = (staleOnly: boolean) => {
-      if (staleOnly && Date.now() - currentCheckedAt < STALE_MS) return Promise.resolve(current())
-      if (currentInFlight) return currentInFlight
-      currentInFlight = fetchPr(directory).finally(() => {
-        currentCheckedAt = Date.now()
-        currentInFlight = undefined
+    const fetchCurrent = (directory: string, staleOnly: boolean) => {
+      if (staleOnly && Date.now() - (currentCheckedAt.get(directory) ?? 0) < STALE_MS)
+        return Promise.resolve(current()[directory])
+      const active = currentInFlight.get(directory)
+      if (active) return active
+      const request = fetchPr(directory).finally(() => {
+        currentCheckedAt.set(directory, Date.now())
+        currentInFlight.delete(directory)
       })
-      return currentInFlight
+      currentInFlight.set(directory, request)
+      return request
     }
 
-    const load = (url: string, staleOnly: boolean) => {
+    const load = (url: string, staleOnly: boolean, directory: string) => {
       if (staleOnly && Date.now() - (checkedAt.get(url) ?? 0) < STALE_MS) return Promise.resolve(state.prs[url])
       const active = inFlight.get(url)
       if (active) return active
@@ -178,15 +189,20 @@ export default Plugin.define({
       return request
     }
 
-    const adopt = async (sessionID: string, references: Array<string | undefined>, staleOnly = false) => {
+    const adopt = async (
+      sessionID: string,
+      references: Array<string | undefined>,
+      staleOnly = false,
+      directory = sessionDirectory(sessionID),
+    ) => {
       if (disposed || references.length === 0) return
       const prs = (
         await Promise.all(
           references.map((reference) =>
             reference === undefined
-              ? fetchCurrent(staleOnly)
+              ? fetchCurrent(directory, staleOnly)
               : staleOnly && state.prs[reference]
-                ? load(reference, true)
+                ? load(reference, true, state.directories?.[reference] ?? directory)
                 : fetchPr(directory, reference),
           ),
         )
@@ -195,24 +211,33 @@ export default Plugin.define({
       const root = context.data.session.root(sessionID)
       const previous = state.roots[root] ?? []
       const next = [...new Set([...previous, ...prs.map((pr) => pr.url)])]
-      if (next.length !== previous.length || prs.some((pr) => changed(state.prs[pr.url], pr)))
+      if (
+        next.length !== previous.length ||
+        prs.some((pr) => changed(state.prs[pr.url], pr) || state.directories?.[pr.url] !== directory)
+      )
         update((draft) => {
           draft.roots[root] = next
-          for (const pr of prs) draft.prs[pr.url] = pr
+          draft.directories ??= {}
+          for (const pr of prs) {
+            draft.prs[pr.url] = pr
+            draft.directories[pr.url] = directory
+          }
         })
     }
 
-    const refreshCurrent = async () => {
+    const refreshCurrent = async (directory: string) => {
       if (disposed) return
-      const pr = await fetchCurrent(true)
-      if (!disposed && changed(current(), pr)) setCurrent(pr)
+      const pr = await fetchCurrent(directory, true)
+      if (!disposed && changed(current()[directory], pr)) setCurrent((previous) => ({ ...previous, [directory]: pr }))
     }
 
     const refresh = async (root: string) => {
       if (disposed) return
-      const prs = (await Promise.all((state.roots[root] ?? []).map((url) => load(url, true)))).filter(
-        (pr) => pr !== undefined,
-      )
+      const prs = (
+        await Promise.all(
+          (state.roots[root] ?? []).map((url) => load(url, true, state.directories?.[url] ?? sessionDirectory(root))),
+        )
+      ).filter((pr) => pr !== undefined)
       if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
       update((draft) => {
         for (const pr of prs) draft.prs[pr.url] = pr
@@ -222,27 +247,29 @@ export default Plugin.define({
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
         if (event.data.shell.status !== "exited" || event.data.shell.exit !== 0) return
-        void adopt(event.data.sessionID, prReferences(event.data.shell.command, event.data.output.output))
+        void adopt(
+          event.data.sessionID,
+          prReferences(event.data.shell.command, event.data.output.output),
+          false,
+          event.location?.directory,
+        )
       }),
       context.data.on("session.tool.success", (event) => {
         const message = context.data.session.message.get(event.data.sessionID, event.data.assistantMessageID)
         if (message?.type !== "assistant") return
         const part = message.content.find((item) => item.type === "tool" && item.id === event.data.id)
-        if (!part?.state || part.state.status !== "completed") return
-        const input = part.state.input
-        const command =
-          typeof input === "object" && input !== null && !Array.isArray(input) && "command" in input
-            ? input.command
-            : undefined
+        if (part?.type !== "tool" || part.state.status !== "completed") return
         void adopt(
           event.data.sessionID,
           prReferences(
-            command,
+            inputCommand(part.state.input),
             event.data.content
               .filter((item) => item.type === "text")
               .map((item) => item.text)
               .join("\n"),
           ),
+          false,
+          event.location?.directory,
         )
       }),
     ]
@@ -253,26 +280,20 @@ export default Plugin.define({
         const root = () => context.data.session.root(props.sessionID)
         createEffect(() => {
           const currentRoot = root()
+          const directory = sessionDirectory(props.sessionID)
           untrack(() => {
-            void refreshCurrent()
+            void refreshCurrent(directory)
             void refresh(currentRoot)
             if (recovered.has(currentRoot)) return
             recovered.add(currentRoot)
-            void adopt(
-              currentRoot,
-              createdPrReferences(
-                [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
-                  context.data.session.message.list(member),
-                ),
-              ),
-              true,
-            )
+            for (const member of new Set([currentRoot, ...context.data.session.family(currentRoot)]))
+              void adopt(member, createdPrReferences(context.data.session.message.list(member)), true)
           })
         })
         const list = () => {
           const urls = state.roots[root()] ?? []
           const prs = new Map<string, Pr>()
-          const branch = current()
+          const branch = current()[sessionDirectory(props.sessionID)]
           if (branch?.state === "OPEN") prs.set(branch.url, branch)
           for (const url of urls) {
             const pr = state.prs[url]
@@ -284,7 +305,7 @@ export default Plugin.define({
           <>
             {list().length > 0 ? (
               <box>
-                <text fg={context.theme.text.default}>
+                <text fg={context.theme.text.base}>
                   <b>Pull requests</b>
                 </text>
                 {list().map((pr) => (

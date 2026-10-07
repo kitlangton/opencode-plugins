@@ -13,15 +13,16 @@ the next step is to review the resulting changes.
 
 ## Install
 
-Add the package to `opencode.jsonc`, then restart OpenCode:
+Add the package to `~/.config/opencode/cli.json`, then restart OpenCode. If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/opencode/cli.json` instead:
 
-```jsonc
+```json
 {
-  "plugins": ["@kitlangton/opencode-session-recap"],
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["@kitlangton/opencode-session-recap"]
 }
 ```
 
-Requires an OpenCode V2 `next` release with `session.generate` and the `session.composer.top` TUI slot.
+Requires OpenCode 2.0.24 or later in the 2.x release series. This is a CLI-only plugin: it runs locally in the terminal, including when connected to a remote server. Do not add it to `opencode.jsonc`; there is no project-local `cli.json`.
 
 ## Use
 
