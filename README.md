@@ -1,14 +1,17 @@
 # OpenCode Plugins
 
-Plugins for the [OpenCode](https://opencode.ai) V2 TUI.
+Plugins for the [OpenCode](https://opencode.ai) V2 TUI, using the OpenCode 2.0.24 plugin API.
+
+Configure these terminal-only plugins in `~/.config/opencode/cli.json`, not in
+`opencode.json(c)`. They export `./tui` and share the terminal's Solid and OpenTUI
+runtime.
 
 ## Plugins
 
 ### [`@kitlangton/opencode-pr-tracker`](./packages/pr-tracker)
 
-Shows pull requests created by a session or its subagents in the sidebar, with
-live GitHub and CI state. The current branch's pull request also appears in the
-prompt footer.
+Shows the checked-out branch's pull request and pull requests adopted by a
+session or its subagents in the sidebar, with live GitHub and CI state.
 
 ```jsonc
 {
@@ -25,9 +28,9 @@ Shows a one-sentence recap of your session above the composer, so you can rememb
 - New input dismisses it. Generation is read-only and never touches session history.
 
 ```jsonc
-// opencode.jsonc
+// cli.json
 {
-  "plugins": ["@kitlangton/opencode-session-recap"],
+  "plugins": ["@kitlangton/opencode-session-recap"]
 }
 ```
 
@@ -44,16 +47,35 @@ Publishing runs in GitHub Actions through npm trusted publishing (OIDC). No toke
 
 ## Local development
 
-Point the TUI plugin list at a package's source file to keep OpenCode hot reload:
+Install dependencies and build the local packages:
+
+```sh
+bun install
+bun run --filter '*' build
+```
+
+Point the `cli.json` plugin list at the built `dist` directories:
 
 ```jsonc
 {
   "plugins": [
-    "/path/to/opencode-plugins/packages/pr-tracker/src/index.tsx",
-    "/path/to/opencode-plugins/packages/session-recap/src/tui.tsx"
+    "/path/to/opencode-plugins/packages/pr-tracker/dist",
+    "/path/to/opencode-plugins/packages/session-recap/dist"
   ]
 }
 ```
 
-Published packages use transformed bundles from `dist`; local development
-continues to use `src` directly.
+The build transforms JSX but does not bundle the host's rendering dependencies.
+It writes a neighboring `tui.js` entrypoint for local directory discovery.
+Rebuild after editing source. Open `/plugins` in the TUI to confirm that both
+plugins appear under **TUI**, not **Server**, and have no failure state.
+
+With the local packages configured, run the loader regression check:
+
+```sh
+uv run scripts/smoke-tui.py
+```
+
+This opens a separate terminal client and checks the real `/plugins` view.
+It does not send a model prompt or restart the shared server. It checks plugin
+loading, not recap generation or GitHub status refresh.

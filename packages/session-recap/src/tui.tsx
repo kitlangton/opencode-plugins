@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { Plugin } from "@opencode-ai/plugin/tui";
+import { Plugin } from "@opencode/plugin/tui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { AUTO_RECAP_AWAY_MS, automaticRecapEligible } from "./eligibility";
 
@@ -191,8 +191,8 @@ function Controller(props: {
   });
 
   onMount(() => {
-    const stop = props.context.data.on("session.input.admitted", (event) => {
-      if (event.data.input.type === "user") dismiss(event.data.sessionID, false);
+    const stop = props.context.data.on("session.inbox.enqueued", (event) => {
+      if (event.data.item.type === "user") dismiss(event.data.sessionID, false);
     });
     const onBlur = () => setFocused(false);
     const onFocus = () => setFocused(true);
@@ -238,7 +238,7 @@ function View(props: { context: Plugin.Context; recap?: Recap }) {
         <Show when={props.recap?.loading} fallback={<text wrapMode="word">Recap: {props.recap?.text}</text>}>
           <text>{SPINNER_FRAMES[frame()]} Generating recap...</text>
           <Show when={props.recap?.text}>
-            <text fg={props.context.theme.text.subdued} wrapMode="word">
+            <text fg={props.context.theme.text.muted} wrapMode="word">
               Recap: {props.recap?.text}
             </text>
           </Show>

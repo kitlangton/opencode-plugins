@@ -19,7 +19,7 @@
     "recap"
   ],
   "exports": {
-    ".": "./dist/index.js"
+    "./tui": "./dist/tui.js"
   },
   "files": [
     "dist",
@@ -35,13 +35,18 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
-  "dependencies": {
-    "@opencode-ai/plugin": "0.0.0-next-17271",
-    "@opentui/core": "0.0.0-20260808-9ecf7c0a",
-    "solid-js": "1.9.14"
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.0.24 <3",
+    "@opentui/core": ">=0.5.14",
+    "@opentui/solid": ">=0.5.14",
+    "solid-js": ">=1.9.0"
   },
   "devDependencies": {
+    "@opencode/plugin": "2.0.24",
+    "@opencode/theme": "2.0.24",
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
     "@tsconfig/bun": "1.0.9",
-    "@opentui/solid": "0.5.1"
+    "solid-js": "1.9.12"
   }
 }

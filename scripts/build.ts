@@ -11,10 +11,24 @@ const result = await Bun.build({
   target: "bun",
   format: "esm",
   plugins: [createSolidTransformPlugin()],
-  external: ["@opencode-ai/plugin/tui", "@opentui/core", "@opentui/core-*", "@opentui/keymap"],
+  external: [
+    "@opencode/plugin",
+    "@opencode/plugin/*",
+    "@opentui/core",
+    "@opentui/core/*",
+    "@opentui/core-*",
+    "@opentui/keymap",
+    "@opentui/solid",
+    "@opentui/solid/*",
+    "solid-js",
+    "solid-js/*",
+  ],
 })
 
 if (!result.success) {
   for (const log of result.logs) console.error(log)
   process.exit(1)
 }
+
+// Local directory plugins use a neighboring tui.js entrypoint.
+await Bun.write(path.join(directory, "dist/tui.js"), 'export { default } from "./index.js"\n')
