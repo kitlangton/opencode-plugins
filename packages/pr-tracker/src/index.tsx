@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
 import { Plugin } from "@opencode-ai/plugin/tui"
-import { createEffect, createSignal, untrack } from "solid-js"
-import { prReferences } from "./reference"
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js"
+import { requestReferences, type Reference } from "./reference"
+import { fetchPr, type Pr } from "./request"
 
 const STALE_MS = 15_000
+const POLL_MS = 45_000
 
 const COLORS: Record<string, string> = {
   OPEN: "#a6da95",
@@ -12,44 +14,10 @@ const COLORS: Record<string, string> = {
   CLOSED: "#ed8796",
 }
 
-type Check = { status?: string; conclusion?: string }
-type Pr = {
-  number: number
-  url: string
-  state: string
-  title: string
-  isDraft: boolean
-  mergedAt?: string
-  statusCheckRollup: Check[]
-}
-
-async function run(cwd: string, ...command: string[]) {
-  const proc = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "ignore" })
-  const stdout = await proc.stdout.text()
-  return { code: await proc.exited, stdout: stdout.trim() }
-}
-
-async function fetchPr(directory: string, reference?: string): Promise<Pr | undefined> {
-  const result = await run(
-    directory,
-    "gh",
-    "pr",
-    "view",
-    ...(reference ? [reference] : []),
-    "--json",
-    "number,url,state,title,isDraft,mergedAt,statusCheckRollup",
-  )
-  if (result.code !== 0) return undefined
-  const parsed: unknown = JSON.parse(result.stdout)
-  if (typeof parsed !== "object" || parsed === null) return undefined
-  const pr = parsed as Pr
-  return typeof pr.number === "number" && typeof pr.url === "string" ? pr : undefined
-}
-
 function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
-  const references = new Set<string | undefined>()
+  const references = new Map<string, Reference>()
   const adopt = (command: unknown, output: unknown) =>
-    prReferences(command, output).forEach((reference) => references.add(reference))
+    requestReferences(command, output).forEach((reference) => references.set(JSON.stringify(reference), reference))
 
   for (const message of messages) {
     if (message.type === "shell") {
@@ -68,7 +36,7 @@ function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["sessio
       )
     }
   }
-  return [...references]
+  return [...references.values()]
 }
 
 function checkStatus(pr: Pr) {
@@ -128,7 +96,7 @@ function PrRow(props: { context: Plugin.Context; pr: Pr }) {
             fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued,
           }}
         >
-          #{props.pr.number}
+          {props.pr.provider === "gitlab" ? "!" : "#"}{props.pr.number}
         </span>{" "}
         {props.pr.title}
       </text>
@@ -178,16 +146,16 @@ export default Plugin.define({
       return request
     }
 
-    const adopt = async (sessionID: string, references: Array<string | undefined>, staleOnly = false) => {
+    const adopt = async (sessionID: string, references: Reference[], staleOnly = false) => {
       if (disposed || references.length === 0) return
       const prs = (
         await Promise.all(
-          references.map((reference) =>
-            reference === undefined
-              ? fetchCurrent(staleOnly)
-              : staleOnly && state.prs[reference]
-                ? load(reference, true)
-                : fetchPr(directory, reference),
+            references.map((reference) =>
+              reference.provider === "github" && reference.value === undefined
+                ? fetchCurrent(staleOnly)
+                : reference.value && staleOnly && state.prs[reference.value]
+                  ? load(reference.value, true)
+                  : fetchPr(directory, reference),
           ),
         )
       ).filter((pr) => pr !== undefined)
@@ -222,7 +190,7 @@ export default Plugin.define({
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
         if (event.data.shell.status !== "exited" || event.data.shell.exit !== 0) return
-        void adopt(event.data.sessionID, prReferences(event.data.shell.command, event.data.output.output))
+        void adopt(event.data.sessionID, requestReferences(event.data.shell.command, event.data.output.output))
       }),
       context.data.on("session.tool.success", (event) => {
         const message = context.data.session.message.get(event.data.sessionID, event.data.assistantMessageID)
@@ -236,7 +204,7 @@ export default Plugin.define({
             : undefined
         void adopt(
           event.data.sessionID,
-          prReferences(
+          requestReferences(
             command,
             event.data.content
               .filter((item) => item.type === "text")
@@ -251,6 +219,15 @@ export default Plugin.define({
       append: "sidebar.content",
       render: (props) => {
         const root = () => context.data.session.root(props.sessionID)
+        createEffect(() => {
+          const route = context.ui.router.current()
+          if (route.type !== "session" || route.sessionID !== props.sessionID) return
+          const timer = setInterval(() => {
+            void refreshCurrent()
+            void refresh(root())
+          }, POLL_MS)
+          onCleanup(() => clearInterval(timer))
+        })
         createEffect(() => {
           const currentRoot = root()
           untrack(() => {
@@ -285,7 +262,7 @@ export default Plugin.define({
             {list().length > 0 ? (
               <box>
                 <text fg={context.theme.text.default}>
-                  <b>Pull requests</b>
+                  <b>{list().every((pr) => pr.provider === "gitlab") ? "Merge requests" : "Pull requests"}</b>
                 </text>
                 {list().map((pr) => (
                   <PrRow context={context} pr={pr} />
