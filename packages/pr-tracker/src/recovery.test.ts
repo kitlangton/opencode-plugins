@@ -3,10 +3,11 @@ import { strict as assert } from "node:assert"
 import path from "node:path"
 import { createHistoryReader } from "./history"
 
-test("recovers a descendant's historical MR with empty TUI caches", async () => {
+for (const mode of ["mixed", "quoted"]) test(`recovers every open family MR from ${mode} commands with empty TUI caches`, async () => {
   const proc = Bun.spawn([
     process.execPath, "--preload", "@opentui/solid/preload",
     path.join(import.meta.dir, "recovery.fixture.ts"),
+    mode,
   ], { cwd: path.join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" })
   const [stdout, stderr, exit] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited])
   assert.equal(exit, 0, stdout + stderr)

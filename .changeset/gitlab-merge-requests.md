@@ -12,3 +12,6 @@ Recover requests from complete, paginated session-family history rather than
 only cached messages, so requests created by unopened subagents appear too.
 Keep explicit request URL lookups working after their original worktree is
 removed, without guessing a repository for numeric references.
+Recover all open requests from direct create/update commands with quoted or
+shell-generated descriptions, without evaluating shell code or adopting URLs
+from the description text.

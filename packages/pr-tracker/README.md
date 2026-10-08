@@ -41,5 +41,7 @@ adopted MR URL selects its own host and project, including nested groups. Numeri
 are shown using the same status indicators as GitHub checks.
 
 Only the CLI's result URL is adopted, not URLs echoed in titles. Command recovery
-is conservative: quoted examples and shell syntax that cannot be parsed safely
-(such as substitutions or redirects) are not adopted.
+accepts quoted title and description payloads, including shell-generated
+descriptions and `$'…'` strings, without evaluating them. The executable and MR
+operation must remain literal. Quoted command examples, dynamic targets, redirects,
+and shell syntax that cannot be parsed safely are not adopted.
