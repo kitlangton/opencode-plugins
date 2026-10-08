@@ -41,6 +41,7 @@ async function fetch(reference?: string | Reference, options: {
   expectedRepo?: string
   expectedSelector?: string
   missingCli?: boolean
+  directory?: string
 } = {}): Promise<Pr | null> {
   // Isolate PATH and authentication fixtures from both the user's CLIs and other tests.
   const proc = Bun.spawn([process.execPath, "--eval", `
@@ -50,7 +51,7 @@ async function fetch(reference?: string | Reference, options: {
   `], {
     env: {
       PATH: options.missingCli ? path.join(directory, "missing") : directory,
-      DIRECTORY: directory,
+      DIRECTORY: options.directory ?? directory,
       REFERENCE: JSON.stringify(reference ?? null),
       GITHUB_RESPONSE: typeof options.github === "string" ? options.github : JSON.stringify(options.github ?? pull),
       GITLAB_RESPONSE: typeof options.gitlab === "string" ? options.gitlab : JSON.stringify(options.gitlab ?? mr),
@@ -120,6 +121,18 @@ describe("fetchPr", () => {
     const legacyPipeline = await fetch(url, { gitlab: { ...mr, head_pipeline: null, pipeline: { status: "failed" } } })
     assert(legacyPipeline !== null)
     assert.deepEqual(legacyPipeline.statusCheckRollup, [{ status: "COMPLETED", conclusion: "FAILURE" }])
+  })
+
+  test("can refresh an explicit MR URL after its original worktree is removed", async () => {
+    const missing = path.join(directory, "removed-worktree")
+    const request = await fetch(url, { directory: missing, expectedRepo: "https://code.example.com/group/team/widget" })
+    assert(request !== null)
+    assert.equal(request.url, url)
+    assert.equal(await fetch({ provider: "gitlab", value: "42" }, { directory: missing }), null,
+      "a numeric MR must not fall back to a different repository")
+    assert.equal(await fetch({ provider: "gitlab", repository: "https://code.example.com/group/team/widget" },
+      { directory: missing }), null,
+      "a repository without a selector must not use another checkout's branch")
   })
 
   test("does not break the sidebar when a CLI is missing, access is denied, or JSON is invalid", async () => {

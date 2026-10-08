@@ -12,6 +12,12 @@ and `gh api repos/<owner>/<repo>/pulls/<number>` commands, and merge requests fr
 successful `glab mr create` and `glab mr update` commands. Requests merely
 mentioned or viewed during research do not appear.
 
+When a session opens, recovery reads its complete history and its subagents'
+history, including nested subagents. You do not need to open each subagent's tab
+first. Recovery is retried during polling if a history read fails, and unchanged
+histories are reused instead of downloaded again.
+Explicit request URLs remain usable after their original worktree is removed.
+
 ```jsonc
 {
   "plugins": ["@kitlangton/opencode-pr-tracker"],

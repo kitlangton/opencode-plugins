@@ -1,4 +1,5 @@
 import type { Reference } from "./reference"
+import { existsSync } from "node:fs"
 
 type Check = { status?: string; conclusion?: string }
 export type Pr = {
@@ -43,7 +44,7 @@ function mrReference(value: string): Reference | undefined {
 
 async function github(directory: string, reference?: Reference): Promise<Pr | undefined> {
   const parsed = await run(
-    directory,
+    reference?.value?.startsWith("https://") && !existsSync(directory) ? process.cwd() : directory,
     "gh",
     "pr",
     "view",
@@ -59,7 +60,8 @@ async function github(directory: string, reference?: Reference): Promise<Pr | un
 
 async function gitlab(directory: string, reference?: Reference): Promise<Pr | undefined> {
   const parsed = await run(
-    directory,
+    reference?.value && reference.repository && /^https?:\/\//.test(reference.repository) && !existsSync(directory)
+      ? process.cwd() : directory,
     "glab",
     "mr",
     "view",

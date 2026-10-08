@@ -7,3 +7,8 @@ glab lookups for GitLab.com and self-managed instances, adopt merge requests fro
 successful create/update commands, and show draft and pipeline status. Refresh
 the active session's request and CI state every 45 seconds without polling
 inactive sessions.
+
+Recover requests from complete, paginated session-family history rather than
+only cached messages, so requests created by unopened subagents appear too.
+Keep explicit request URL lookups working after their original worktree is
+removed, without guessing a repository for numeric references.

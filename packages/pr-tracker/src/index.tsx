@@ -4,6 +4,7 @@ import { Plugin } from "@opencode-ai/plugin/tui"
 import { createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { requestReferences, type Reference } from "./reference"
 import { fetchPr, type Pr } from "./request"
+import { createHistoryReader } from "./history"
 
 const STALE_MS = 15_000
 const POLL_MS = 45_000
@@ -12,31 +13,6 @@ const COLORS: Record<string, string> = {
   OPEN: "#a6da95",
   MERGED: "#c6a0f6",
   CLOSED: "#ed8796",
-}
-
-function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
-  const references = new Map<string, Reference>()
-  const adopt = (command: unknown, output: unknown) =>
-    requestReferences(command, output).forEach((reference) => references.set(JSON.stringify(reference), reference))
-
-  for (const message of messages) {
-    if (message.type === "shell") {
-      if (message.status === "exited" && message.exit === 0) adopt(message.command, message.output?.output)
-      continue
-    }
-    if (message.type !== "assistant") continue
-    for (const part of message.content) {
-      if (part.type !== "tool" || part.state.status !== "completed") continue
-      adopt(
-        part.state.input.command,
-        part.state.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n"),
-      )
-    }
-  }
-  return [...references.values()]
 }
 
 function checkStatus(pr: Pr) {
@@ -113,11 +89,16 @@ export default Plugin.define({
       initial: {
         roots: {} as Record<string, string[]>,
         prs: {} as Record<string, Pr>,
+        rootIDs: {} as Record<string, string>,
       },
     })
 
     let disposed = false
-    const recovered = new Set<string>()
+    const rootOf = (sessionID: string) => state.rootIDs?.[sessionID] ?? context.data.session.root(sessionID)
+    const history = createHistoryReader(context.client)
+    const abort = new AbortController()
+    const recoveryInFlight = new Map<string, Promise<void>>()
+    const recoveryCheckedAt = new Map<string, number>()
     const checkedAt = new Map<string, number>()
     const inFlight = new Map<string, Promise<Pr | undefined>>()
     const [current, setCurrent] = createSignal<Pr>()
@@ -146,21 +127,26 @@ export default Plugin.define({
       return request
     }
 
-    const adopt = async (sessionID: string, references: Reference[], staleOnly = false) => {
+    const adopt = async (
+      sessionID: string,
+      references: Reference[],
+      staleOnly = false,
+      requestDirectory = directory,
+      root = rootOf(sessionID),
+    ) => {
       if (disposed || references.length === 0) return
       const prs = (
         await Promise.all(
-            references.map((reference) =>
-              reference.provider === "github" && reference.value === undefined
-                ? fetchCurrent(staleOnly)
-                : reference.value && staleOnly && state.prs[reference.value]
-                  ? load(reference.value, true)
-                  : fetchPr(directory, reference),
+          references.map((reference) =>
+            reference.provider === "github" && reference.value === undefined && requestDirectory === directory
+              ? fetchCurrent(staleOnly)
+              : reference.value && staleOnly && state.prs[reference.value]
+                ? load(reference.value, true)
+                : fetchPr(requestDirectory, reference),
           ),
         )
       ).filter((pr) => pr !== undefined)
       if (disposed || prs.length === 0) return
-      const root = context.data.session.root(sessionID)
       const previous = state.roots[root] ?? []
       const next = [...new Set([...previous, ...prs.map((pr) => pr.url)])]
       if (next.length !== previous.length || prs.some((pr) => changed(state.prs[pr.url], pr)))
@@ -168,6 +154,26 @@ export default Plugin.define({
           draft.roots[root] = next
           for (const pr of prs) draft.prs[pr.url] = pr
         })
+    }
+
+    const recover = (sessionID: string) => {
+      if (disposed || Date.now() - (recoveryCheckedAt.get(sessionID) ?? 0) < STALE_MS) return Promise.resolve()
+      const active = recoveryInFlight.get(sessionID)
+      if (active) return active
+      const request = history.recover(sessionID, abort.signal).then(async ({ rootID, members }) => {
+        if (disposed) return
+        if (members.some((member) => state.rootIDs?.[member.id] !== rootID))
+          update((draft) => {
+            draft.rootIDs ??= {}
+            for (const member of members) draft.rootIDs[member.id] = rootID
+          })
+        await Promise.all(members.map((member) => adopt(member.id, member.references, true, member.directory, rootID)))
+        if (!disposed) recoveryCheckedAt.set(sessionID, Date.now())
+      }).catch(() => {
+        // Do not mark failed history reads complete; the next refresh retries.
+      }).finally(() => recoveryInFlight.delete(sessionID))
+      recoveryInFlight.set(sessionID, request)
+      return request
     }
 
     const refreshCurrent = async () => {
@@ -218,13 +224,14 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: (props) => {
-        const root = () => context.data.session.root(props.sessionID)
+        const root = () => rootOf(props.sessionID)
         createEffect(() => {
           const route = context.ui.router.current()
           if (route.type !== "session" || route.sessionID !== props.sessionID) return
           const timer = setInterval(() => {
             void refreshCurrent()
             void refresh(root())
+            void recover(props.sessionID)
           }, POLL_MS)
           onCleanup(() => clearInterval(timer))
         })
@@ -233,17 +240,7 @@ export default Plugin.define({
           untrack(() => {
             void refreshCurrent()
             void refresh(currentRoot)
-            if (recovered.has(currentRoot)) return
-            recovered.add(currentRoot)
-            void adopt(
-              currentRoot,
-              createdPrReferences(
-                [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
-                  context.data.session.message.list(member),
-                ),
-              ),
-              true,
-            )
+            void recover(props.sessionID)
           })
         })
         const list = () => {
@@ -276,6 +273,7 @@ export default Plugin.define({
 
     return () => {
       disposed = true
+      abort.abort()
       for (const unsubscribe of unsubscribers) unsubscribe()
     }
   },
