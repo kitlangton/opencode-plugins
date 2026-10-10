@@ -1,74 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 
 import { Plugin } from "@opencode-ai/plugin/tui"
-import { createEffect, createSignal, untrack } from "solid-js"
-import { prReferences } from "./reference"
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js"
+import { requestReferences, type Reference } from "./reference"
+import { fetchPr, mrReference, type Pr } from "./request"
+import { createHistoryReader } from "./history"
 
 const STALE_MS = 15_000
+const POLL_MS = 45_000
 
 const COLORS: Record<string, string> = {
   OPEN: "#a6da95",
   MERGED: "#c6a0f6",
   CLOSED: "#ed8796",
-}
-
-type Check = { status?: string; conclusion?: string }
-type Pr = {
-  number: number
-  url: string
-  state: string
-  title: string
-  isDraft: boolean
-  mergedAt?: string
-  statusCheckRollup: Check[]
-}
-
-async function run(cwd: string, ...command: string[]) {
-  const proc = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "ignore" })
-  const stdout = await proc.stdout.text()
-  return { code: await proc.exited, stdout: stdout.trim() }
-}
-
-async function fetchPr(directory: string, reference?: string): Promise<Pr | undefined> {
-  const result = await run(
-    directory,
-    "gh",
-    "pr",
-    "view",
-    ...(reference ? [reference] : []),
-    "--json",
-    "number,url,state,title,isDraft,mergedAt,statusCheckRollup",
-  )
-  if (result.code !== 0) return undefined
-  const parsed: unknown = JSON.parse(result.stdout)
-  if (typeof parsed !== "object" || parsed === null) return undefined
-  const pr = parsed as Pr
-  return typeof pr.number === "number" && typeof pr.url === "string" ? pr : undefined
-}
-
-function createdPrReferences(messages: ReturnType<Plugin.Context["data"]["session"]["message"]["list"]>) {
-  const references = new Set<string | undefined>()
-  const adopt = (command: unknown, output: unknown) =>
-    prReferences(command, output).forEach((reference) => references.add(reference))
-
-  for (const message of messages) {
-    if (message.type === "shell") {
-      if (message.status === "exited" && message.exit === 0) adopt(message.command, message.output?.output)
-      continue
-    }
-    if (message.type !== "assistant") continue
-    for (const part of message.content) {
-      if (part.type !== "tool" || part.state.status !== "completed") continue
-      adopt(
-        part.state.input.command,
-        part.state.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n"),
-      )
-    }
-  }
-  return [...references]
 }
 
 function checkStatus(pr: Pr) {
@@ -128,7 +72,7 @@ function PrRow(props: { context: Plugin.Context; pr: Pr }) {
             fg: hovered() ? props.context.theme.text.default : props.context.theme.text.subdued,
           }}
         >
-          #{props.pr.number}
+          {props.pr.provider === "gitlab" ? "!" : "#"}{props.pr.number}
         </span>{" "}
         {props.pr.title}
       </text>
@@ -145,11 +89,19 @@ export default Plugin.define({
       initial: {
         roots: {} as Record<string, string[]>,
         prs: {} as Record<string, Pr>,
+        rootIDs: {} as Record<string, string>,
       },
+    })
+    const [manual, updateManual] = context.storage.store("manual-mrs-v1", {
+      initial: { roots: {} as Record<string, string[]> },
     })
 
     let disposed = false
-    const recovered = new Set<string>()
+    const rootOf = (sessionID: string) => state.rootIDs?.[sessionID] ?? context.data.session.root(sessionID)
+    const history = createHistoryReader(context.client)
+    const abort = new AbortController()
+    const recoveryInFlight = new Map<string, Promise<void>>()
+    const recoveryCheckedAt = new Map<string, number>()
     const checkedAt = new Map<string, number>()
     const inFlight = new Map<string, Promise<Pr | undefined>>()
     const [current, setCurrent] = createSignal<Pr>()
@@ -178,21 +130,26 @@ export default Plugin.define({
       return request
     }
 
-    const adopt = async (sessionID: string, references: Array<string | undefined>, staleOnly = false) => {
+    const adopt = async (
+      sessionID: string,
+      references: Reference[],
+      staleOnly = false,
+      requestDirectory = directory,
+      root = rootOf(sessionID),
+    ) => {
       if (disposed || references.length === 0) return
       const prs = (
         await Promise.all(
           references.map((reference) =>
-            reference === undefined
+            reference.provider === "github" && reference.value === undefined && requestDirectory === directory
               ? fetchCurrent(staleOnly)
-              : staleOnly && state.prs[reference]
-                ? load(reference, true)
-                : fetchPr(directory, reference),
+              : reference.value && staleOnly && state.prs[reference.value]
+                ? load(reference.value, true)
+                : fetchPr(requestDirectory, reference),
           ),
         )
       ).filter((pr) => pr !== undefined)
       if (disposed || prs.length === 0) return
-      const root = context.data.session.root(sessionID)
       const previous = state.roots[root] ?? []
       const next = [...new Set([...previous, ...prs.map((pr) => pr.url)])]
       if (next.length !== previous.length || prs.some((pr) => changed(state.prs[pr.url], pr)))
@@ -200,6 +157,26 @@ export default Plugin.define({
           draft.roots[root] = next
           for (const pr of prs) draft.prs[pr.url] = pr
         })
+    }
+
+    const recover = (sessionID: string) => {
+      if (disposed || Date.now() - (recoveryCheckedAt.get(sessionID) ?? 0) < STALE_MS) return Promise.resolve()
+      const active = recoveryInFlight.get(sessionID)
+      if (active) return active
+      const request = history.recover(sessionID, abort.signal).then(async ({ rootID, members }) => {
+        if (disposed) return
+        if (members.some((member) => state.rootIDs?.[member.id] !== rootID))
+          update((draft) => {
+            draft.rootIDs ??= {}
+            for (const member of members) draft.rootIDs[member.id] = rootID
+          })
+        await Promise.all(members.map((member) => adopt(member.id, member.references, true, member.directory, rootID)))
+        if (!disposed) recoveryCheckedAt.set(sessionID, Date.now())
+      }).catch(() => {
+        // Do not mark failed history reads complete; the next refresh retries.
+      }).finally(() => recoveryInFlight.delete(sessionID))
+      recoveryInFlight.set(sessionID, request)
+      return request
     }
 
     const refreshCurrent = async () => {
@@ -210,7 +187,8 @@ export default Plugin.define({
 
     const refresh = async (root: string) => {
       if (disposed) return
-      const prs = (await Promise.all((state.roots[root] ?? []).map((url) => load(url, true)))).filter(
+      const urls = [...new Set([...(state.roots[root] ?? []), ...(manual.roots[root] ?? [])])]
+      const prs = (await Promise.all(urls.map((url) => load(url, true)))).filter(
         (pr) => pr !== undefined,
       )
       if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
@@ -219,10 +197,62 @@ export default Plugin.define({
       })
     }
 
+    context.keymap.layer(() => ({
+      mode: "global",
+      commands: [{
+        id: "kit.pr-tracker.track",
+        title: "Track a merge request",
+        group: "GitLab",
+        palette: true,
+        slash: { name: "mr-track", arguments: true },
+        enabled: () => context.ui.router.current().type === "session",
+        run: async (input) => {
+          const route = context.ui.router.current()
+          if (route.type !== "session") {
+            context.ui.toast.show({ message: "Open a session before tracking a merge request.", variant: "error" })
+            return
+          }
+          const value = input?.trim() || await context.ui.dialog.prompt({ title: "Track a merge request", placeholder: "GitLab MR URL" })
+          if (value === undefined) return
+          const reference = mrReference(value.trim())
+          if (!reference) {
+            context.ui.toast.show({ message: "Enter a full GitLab merge request URL.", variant: "error" })
+            return
+          }
+          try {
+            const session = await context.client.session.get({ sessionID: route.sessionID })
+            let root = session
+            while (root.parentID) root = await context.client.session.get({ sessionID: root.parentID })
+            const pr = await fetchPr(session.location.directory, reference)
+            if (!pr || pr.provider !== "gitlab") {
+              context.ui.toast.show({ message: "Cannot load this MR. Check the URL and glab sign-in.", variant: "error" })
+              return
+            }
+            if (disposed) return
+            await updateManual((draft) => {
+              draft.roots[root.id] = [...new Set([...(draft.roots[root.id] ?? []), pr.url])]
+            })
+            if (disposed) return
+            update((draft) => {
+              draft.rootIDs ??= {}
+              draft.rootIDs[session.id] = root.id
+              draft.prs[pr.url] = pr
+            })
+            context.ui.toast.show({
+              message: pr.state === "OPEN" ? `Tracked !${pr.number}.` : `Tracked !${pr.number}. Closed and merged MRs stay hidden.`,
+              variant: pr.state === "OPEN" ? "success" : "info",
+            })
+          } catch {
+            context.ui.toast.show({ message: "Cannot track this MR. Check the session, glab sign-in, and local storage.", variant: "error" })
+          }
+        },
+      }],
+    }))
+
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
         if (event.data.shell.status !== "exited" || event.data.shell.exit !== 0) return
-        void adopt(event.data.sessionID, prReferences(event.data.shell.command, event.data.output.output))
+        void adopt(event.data.sessionID, requestReferences(event.data.shell.command, event.data.output.output))
       }),
       context.data.on("session.tool.success", (event) => {
         const message = context.data.session.message.get(event.data.sessionID, event.data.assistantMessageID)
@@ -236,7 +266,7 @@ export default Plugin.define({
             : undefined
         void adopt(
           event.data.sessionID,
-          prReferences(
+          requestReferences(
             command,
             event.data.content
               .filter((item) => item.type === "text")
@@ -250,27 +280,27 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: (props) => {
-        const root = () => context.data.session.root(props.sessionID)
+        const root = () => rootOf(props.sessionID)
+        createEffect(() => {
+          const route = context.ui.router.current()
+          if (route.type !== "session" || route.sessionID !== props.sessionID) return
+          const timer = setInterval(() => {
+            void refreshCurrent()
+            void refresh(root())
+            void recover(props.sessionID)
+          }, POLL_MS)
+          onCleanup(() => clearInterval(timer))
+        })
         createEffect(() => {
           const currentRoot = root()
           untrack(() => {
             void refreshCurrent()
             void refresh(currentRoot)
-            if (recovered.has(currentRoot)) return
-            recovered.add(currentRoot)
-            void adopt(
-              currentRoot,
-              createdPrReferences(
-                [...new Set([currentRoot, ...context.data.session.family(currentRoot)])].flatMap((member) =>
-                  context.data.session.message.list(member),
-                ),
-              ),
-              true,
-            )
+            void recover(props.sessionID)
           })
         })
         const list = () => {
-          const urls = state.roots[root()] ?? []
+          const urls = [...new Set([...(state.roots[root()] ?? []), ...(manual.roots[root()] ?? [])])]
           const prs = new Map<string, Pr>()
           const branch = current()
           if (branch?.state === "OPEN") prs.set(branch.url, branch)
@@ -285,7 +315,7 @@ export default Plugin.define({
             {list().length > 0 ? (
               <box>
                 <text fg={context.theme.text.default}>
-                  <b>Pull requests</b>
+                  <b>{list().every((pr) => pr.provider === "gitlab") ? "Merge requests" : "Pull requests"}</b>
                 </text>
                 {list().map((pr) => (
                   <PrRow context={context} pr={pr} />
@@ -299,6 +329,7 @@ export default Plugin.define({
 
     return () => {
       disposed = true
+      abort.abort()
       for (const unsubscribe of unsubscribers) unsubscribe()
     }
   },
