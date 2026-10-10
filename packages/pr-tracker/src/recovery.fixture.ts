@@ -19,7 +19,9 @@ const closedPr: Pr = {
   title: "Already merged", state: "MERGED",
 }
 const quotedOnly = process.argv[2] === "quoted"
+const { mrReference } = await import("./request")
 mock.module("./request", () => ({
+  mrReference,
   fetchPr: async (directory: string, reference?: string | Reference) => {
     const value = typeof reference === "string" ? reference : reference?.value
     if (directory === "/example/root" && value === rootPr.url) return rootPr
@@ -39,7 +41,11 @@ type Sidebar = (props: { sessionID: string }) => ReturnType<Parameters<Plugin.Co
 let sidebar: Sidebar | undefined
 const context = {
   location: { directory: "/example/root" },
-  storage: { memory: () => [store, (mutate: (draft: typeof store) => void) => setStore(produce(mutate))] },
+  storage: {
+    memory: () => [store, (mutate: (draft: typeof store) => void) => setStore(produce(mutate))],
+    store: () => [{ roots: {} }, async () => {}],
+  },
+  keymap: { layer: () => {} },
   client: {
     session: {
       get: async ({ sessionID }: { sessionID: string }) => {

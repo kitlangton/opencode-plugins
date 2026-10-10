@@ -3,7 +3,7 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import { createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { requestReferences, type Reference } from "./reference"
-import { fetchPr, type Pr } from "./request"
+import { fetchPr, mrReference, type Pr } from "./request"
 import { createHistoryReader } from "./history"
 
 const STALE_MS = 15_000
@@ -91,6 +91,9 @@ export default Plugin.define({
         prs: {} as Record<string, Pr>,
         rootIDs: {} as Record<string, string>,
       },
+    })
+    const [manual, updateManual] = context.storage.store("manual-mrs-v1", {
+      initial: { roots: {} as Record<string, string[]> },
     })
 
     let disposed = false
@@ -184,7 +187,8 @@ export default Plugin.define({
 
     const refresh = async (root: string) => {
       if (disposed) return
-      const prs = (await Promise.all((state.roots[root] ?? []).map((url) => load(url, true)))).filter(
+      const urls = [...new Set([...(state.roots[root] ?? []), ...(manual.roots[root] ?? [])])]
+      const prs = (await Promise.all(urls.map((url) => load(url, true)))).filter(
         (pr) => pr !== undefined,
       )
       if (disposed || !prs.some((pr) => changed(state.prs[pr.url], pr))) return
@@ -192,6 +196,58 @@ export default Plugin.define({
         for (const pr of prs) draft.prs[pr.url] = pr
       })
     }
+
+    context.keymap.layer(() => ({
+      mode: "global",
+      commands: [{
+        id: "kit.pr-tracker.track",
+        title: "Track a merge request",
+        group: "GitLab",
+        palette: true,
+        slash: { name: "mr-track", arguments: true },
+        enabled: () => context.ui.router.current().type === "session",
+        run: async (input) => {
+          const route = context.ui.router.current()
+          if (route.type !== "session") {
+            context.ui.toast.show({ message: "Open a session before tracking a merge request.", variant: "error" })
+            return
+          }
+          const value = input?.trim() || await context.ui.dialog.prompt({ title: "Track a merge request", placeholder: "GitLab MR URL" })
+          if (value === undefined) return
+          const reference = mrReference(value.trim())
+          if (!reference) {
+            context.ui.toast.show({ message: "Enter a full GitLab merge request URL.", variant: "error" })
+            return
+          }
+          try {
+            const session = await context.client.session.get({ sessionID: route.sessionID })
+            let root = session
+            while (root.parentID) root = await context.client.session.get({ sessionID: root.parentID })
+            const pr = await fetchPr(session.location.directory, reference)
+            if (!pr || pr.provider !== "gitlab") {
+              context.ui.toast.show({ message: "Cannot load this MR. Check the URL and glab sign-in.", variant: "error" })
+              return
+            }
+            if (disposed) return
+            await updateManual((draft) => {
+              draft.roots[root.id] = [...new Set([...(draft.roots[root.id] ?? []), pr.url])]
+            })
+            if (disposed) return
+            update((draft) => {
+              draft.rootIDs ??= {}
+              draft.rootIDs[session.id] = root.id
+              draft.prs[pr.url] = pr
+            })
+            context.ui.toast.show({
+              message: pr.state === "OPEN" ? `Tracked !${pr.number}.` : `Tracked !${pr.number}. Closed and merged MRs stay hidden.`,
+              variant: pr.state === "OPEN" ? "success" : "info",
+            })
+          } catch {
+            context.ui.toast.show({ message: "Cannot track this MR. Check the session, glab sign-in, and local storage.", variant: "error" })
+          }
+        },
+      }],
+    }))
 
     const unsubscribers = [
       context.data.on("session.shell.ended", (event) => {
@@ -244,7 +300,7 @@ export default Plugin.define({
           })
         })
         const list = () => {
-          const urls = state.roots[root()] ?? []
+          const urls = [...new Set([...(state.roots[root()] ?? []), ...(manual.roots[root()] ?? [])])]
           const prs = new Map<string, Pr>()
           const branch = current()
           if (branch?.state === "OPEN") prs.set(branch.url, branch)

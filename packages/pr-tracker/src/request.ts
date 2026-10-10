@@ -31,7 +31,7 @@ async function run(cwd: string, ...command: string[]): Promise<unknown> {
   }
 }
 
-function mrReference(value: string): Reference | undefined {
+export function mrReference(value: string): Reference | undefined {
   try {
     const url = new URL(value)
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return undefined

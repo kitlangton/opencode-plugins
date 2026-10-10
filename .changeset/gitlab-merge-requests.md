@@ -17,3 +17,5 @@ shell-generated descriptions, without evaluating shell code or adopting URLs
 from the description text.
 Recover successful GitLab API PUT updates from their JSON MR result, including
 identity and field-preserving jq projections, without adopting read-only API calls.
+Add `/mr-track <URL>` for explicit, persistent session-family MR links when updates
+run through scripts that cannot be recovered safely.

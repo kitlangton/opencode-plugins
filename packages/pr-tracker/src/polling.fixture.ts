@@ -14,7 +14,9 @@ const b: Pr = { ...a, number: 2, url: a.url.replace(/1$/, "2"), title: "Session 
 const [store, setStore] = createStore({ roots: { A: [a.url], B: [b.url] }, prs: { [a.url]: a, [b.url]: b } })
 const lookups: (string | undefined)[] = []
 let passed = false
+const { mrReference } = await import("./request")
 mock.module("./request", () => ({
+  mrReference,
   fetchPr: async (_directory: string, url?: string) => {
     lookups.push(url)
     if (!url) return undefined
@@ -30,7 +32,11 @@ let sidebar: Sidebar | undefined
 // Supply the host APIs used by this plugin; rendering and reactive ownership stay real.
 const context = {
   location: { directory: "/example/widget" },
-  storage: { memory: () => [store, (mutate: (draft: typeof store) => void) => setStore(produce(mutate))] },
+  storage: {
+    memory: () => [store, (mutate: (draft: typeof store) => void) => setStore(produce(mutate))],
+    store: () => [{ roots: {} }, async () => {}],
+  },
+  keymap: { layer: () => {} },
   data: {
     on: () => () => {},
     session: { root: (id: string) => id, family: () => [], message: { list: () => [] } },

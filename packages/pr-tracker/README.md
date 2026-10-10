@@ -20,6 +20,12 @@ first. Recovery is retried during polling if a history read fails, and unchanged
 histories are reused instead of downloaded again.
 Explicit request URLs remain usable after their original worktree is removed.
 
+For MRs updated through Python or other scripts, run `/mr-track <GitLab MR URL>`
+in the owning session. The command validates the MR with `glab` and saves its
+canonical URL for that session family. Explicit links survive TUI restarts and
+do not appear in unrelated sessions. Closed and merged MRs remain hidden. Running
+the command from the palette prompts for a URL.
+
 ```jsonc
 {
   "plugins": ["@kitlangton/opencode-pr-tracker"],
