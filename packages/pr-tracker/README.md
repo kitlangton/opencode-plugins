@@ -9,8 +9,10 @@ hidden. GitHub requests use `#123`; GitLab requests use `!123`.
 
 The plugin adopts pull requests from successful `gh pr create`, `gh pr edit`,
 and `gh api repos/<owner>/<repo>/pulls/<number>` commands, and merge requests from
-successful `glab mr create` and `glab mr update` commands. Requests merely
-mentioned or viewed during research do not appear.
+successful `glab mr create`, `glab mr update`, and `glab api` PUT updates to
+`projects/<project>/merge_requests/<number>`. API updates use the returned JSON MR
+number and URL, including `jq` projections that preserve those fields. Requests
+merely mentioned or viewed during research do not appear.
 
 When a session opens, recovery reads its complete history and its subagents'
 history, including nested subagents. You do not need to open each subagent's tab

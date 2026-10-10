@@ -78,7 +78,7 @@ function substitutionEnd(command: string, start: number): number | undefined {
 
 // Executables, actions, selectors, and flags must be literal. Quoted expansions
 // and ANSI strings stay opaque and can only be accepted as text option values.
-function shellCommands(command: string): ShellWord[][] {
+function shellCommands(command: string, pipeline = false): ShellWord[][] {
   const commands: ShellWord[][] = []
   let words: ShellWord[] = []
   let word: string | undefined
@@ -141,10 +141,17 @@ function shellCommands(command: string): ShellWord[][] {
       while (index < command.length && command[index] !== "\n") index++
       endCommand()
     } else if (character === "&" && command[index + 1] === "&") {
+      if (pipeline) return []
       index++
       endCommand()
+    } else if (character === "|" && pipeline && command[index + 1] !== "|") {
+      endCommand()
     } else if (/[;&|]/.test(character)) return []
-    else if (character === "\n") endCommand()
+    else if (character === "\n") {
+      if (pipeline && commands.length === 1 && words.length === 0 && word === undefined) continue
+      if (pipeline && command.slice(index).trim() !== "") return []
+      endCommand()
+    }
     else if (/\s/.test(character)) endWord()
     else append(character)
   }
@@ -194,9 +201,84 @@ function updateReference(args: string[]): Reference | undefined {
   return { provider: "gitlab", value, repository }
 }
 
+function resultProjection(filter: string): boolean {
+  if (filter === ".") return true
+  // Accept only object projections, not filters that can replace the API result
+  // with MR-looking JSON taken from a description, another file, or a literal.
+  const name = "[A-Za-z_]\\w*"
+  const object = `\\{\\s*${name}(?:\\s*,\\s*${name})*\\s*\\}`
+  const field = `${name}(?:\\s*:\\s*(?:\\.${name}|\\(\\s*\\.${name}\\s*\\|\\s*${object}\\s*\\)))?`
+  if (!new RegExp(`^\\{\\s*${field}(?:\\s*,\\s*${field})*\\s*\\}$`).test(filter)) return false
+  const fields = filter.match(new RegExp(field, "g")) ?? []
+  const keys = fields.map((value) => value.match(new RegExp(`^${name}`))![0])
+  if (new Set(keys).size !== keys.length) return false
+  return ["iid", "web_url"].every((key) => {
+    const value = fields[keys.indexOf(key)]?.replace(/\s/g, "")
+    return value === key || value === `${key}:.${key}`
+  })
+}
+
+function apiReference(command: string, output: unknown): Reference | undefined {
+  const commands = shellCommands(command, true)
+  const operation = commands[0]
+  if (!operation || commands.length > 2 || operation.slice(0, 2).some((word) => word.opaque) ||
+    !/(?:^|\/)glab$/.test(operation[0]?.value ?? "") || operation[1]?.value !== "api") return undefined
+  const filter = commands[1]
+  if (filter) {
+    const words = filter.map((word) => word.value)
+    if (filter.some((word) => word.opaque) || !/(?:^|\/)jq$/.test(words.shift() ?? "")) return undefined
+    if (["-c", "--compact-output"].includes(words[0] ?? "")) words.shift()
+    if (words.length !== 1 || !resultProjection(words[0]!)) return undefined
+  }
+  let endpoint: string | undefined
+  let method: string | undefined
+  let hostname: string | undefined
+  const fields = new Set(["-f", "--raw-field", "-F", "--field"])
+  const options = new Set([...fields, "-X", "--method", "--hostname", "--input", "-H", "--header", "--output"])
+  for (let index = 2; index < operation.length; index++) {
+    const argument = operation[index]!
+    if (!argument.value.startsWith("-")) {
+      if (endpoint !== undefined || argument.opaque) return undefined
+      endpoint = argument.value
+      continue
+    }
+    const attached = argument.value.match(/^(-[XfFH])([^=].*)$/s)
+    const [flag, inline] = attached ? attached.slice(1) : argument.value.split(/=(.*)/s)
+    if (!options.has(flag!) || (argument.opaque && (!fields.has(flag!) || inline === undefined))) return undefined
+    const option = inline === undefined ? operation[++index] : { value: inline, opaque: argument.opaque }
+    if (!option || (option.opaque && !fields.has(flag!))) return undefined
+    if (fields.has(flag!) && !/^[^=]+=/s.test(option.value)) return undefined
+    if (flag === "-X" || flag === "--method") {
+      if (method !== undefined) return undefined
+      method = option.value
+    } else if (flag === "--hostname") {
+      if (hostname !== undefined) return undefined
+      hostname = option.value
+    }
+  }
+  const target = endpoint?.match(/^\/?(?:api\/v4\/)?projects\/([^/]+)\/merge_requests\/([1-9]\d*)$/)
+  if (method !== "PUT" || !target || typeof output !== "string") return undefined
+  try {
+    const response: unknown = JSON.parse(output)
+    if (typeof response !== "object" || response === null || Array.isArray(response) ||
+      !("iid" in response) || response.iid !== Number(target[2]) ||
+      !("web_url" in response) || typeof response.web_url !== "string" || !mrUrlPattern.test(response.web_url)) return undefined
+    if (/^\d+$/.test(target[1]!) && "project_id" in response && response.project_id !== Number(target[1])) return undefined
+    const url = new URL(response.web_url)
+    if (url.username || url.password || (hostname !== undefined && url.host !== hostname) ||
+      !url.pathname.endsWith(`/merge_requests/${target[2]}`)) return undefined
+    if (target[1]!.includes("%") && decodeURIComponent(target[1]!) !== url.pathname.split("/-/merge_requests/")[0]?.slice(1)) return undefined
+    return { provider: "gitlab", value: response.web_url }
+  } catch {
+    return undefined
+  }
+}
+
 export function requestReferences(command: unknown, output: unknown): Reference[] {
   const github = prReferences(command, output).map((value): Reference => ({ provider: "github", value }))
   if (typeof command !== "string") return github
+  const api = apiReference(command, output)
+  if (api) return [...github, api]
   const commands = shellCommands(command)
   const operations = commands.filter((words) =>
     words.slice(0, 3).every((word) => !word.opaque) &&

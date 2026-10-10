@@ -28,6 +28,51 @@ describe("prReferences", () => {
 })
 
 describe("requestReferences", () => {
+  test("adopts merge requests from GitLab API updates and JSON result filters", () => {
+    const url = "https://gitlab.cdn77.eu/net/flop/flop/-/merge_requests/22920"
+    const response = JSON.stringify({ iid: 22920, project_id: 2, web_url: url })
+    for (const command of [
+      "glab api projects/2/merge_requests/22920 --method PUT -f description='Updated description'",
+      "glab api projects/2/merge_requests/22920 --method PUT -f description='Updated description' | jq '{iid,web_url}'",
+      "glab api projects/2/merge_requests/22920 -XPUT -fdescription=text | jq -c '{iid,sha,web_url,head_pipeline: (.head_pipeline | {id,status,sha})}'",
+      "glab api projects/2/merge_requests/22920 -X=PUT -f=description=text",
+      "glab api projects/2/merge_requests/22920 -X PUT |\n jq '{iid: .iid,web_url: .web_url}'",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq '.'",
+      "glab api -X PUT projects/net%2Fflop%2Fflop/merge_requests/22920 --hostname gitlab.cdn77.eu --input body.json",
+      "glab api --method=PUT projects/:id/merge_requests/22920 --raw-field=description=updated",
+      "glab api projects/2/merge_requests/22920 -X PUT -f description=\"$(cat <<'EOF'\nDetails with $text and `code`.\nEOF\n)\" | jq '{iid,web_url}'",
+      "glab api projects/2/merge_requests/22920 -X PUT -f description=$'Details with \\nlines'",
+    ]) assert.deepEqual(requestReferences(command, response), [{ provider: "gitlab", value: url }], command)
+
+    for (const command of [
+      "glab api projects/2/merge_requests/22920",
+      "glab api projects/2/merge_requests/22920 -X GET -f description=updated",
+      "glab api projects/2/merge_requests/22920 -X POST -f description=updated",
+      "glab api projects/2/merge_requests/22920 -X DELETE",
+      "glab api projects/2/merge_requests/22920/discussions -X POST -f body=updated",
+      "glab api projects/2/merge_requests/22920 -X PUT --help",
+      "glab api projects/2/merge_requests/22920 -X PUT --silent",
+      'glab api "$ENDPOINT" -X PUT',
+      'glab api projects/2/merge_requests/22920 -X "$METHOD"',
+      'glab api projects/2/merge_requests/22920 -X PUT --hostname "$HOST"',
+      "glab api projects/2/merge_requests/22920 -X PUT | cat response.json",
+      "glab api projects/2/merge_requests/22920 -X PUT && jq '{iid,web_url}' response.json",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq '{iid,web_url}' response.json",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq --argfile mr response.json '$mr'",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq '.description | fromjson | {iid,web_url}'",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq '{iid,web_url:.description}'",
+      "glab api projects/2/merge_requests/22920 -X PUT | jq '{iid,web_url,web_url:.description}'",
+      "printf '%s' 'glab api projects/2/merge_requests/22920 -X PUT'",
+    ]) assert.deepEqual(requestReferences(command, response), [], command)
+
+    const command = "glab api projects/2/merge_requests/22920 -X PUT"
+    for (const output of ["", url, JSON.stringify({ iid: 22921, web_url: url }),
+      JSON.stringify({ iid: 22920, web_url: "https://gitlab.cdn77.eu/net/flop/flop/-/merge_requests/22921" }),
+      JSON.stringify({ iid: 22920, project_id: 3, web_url: url }), JSON.stringify([{ iid: 22920, web_url: url }])])
+      assert.deepEqual(requestReferences(command, output), [], output)
+    assert.deepEqual(requestReferences(`${command} --hostname gitlab.com`, response), [])
+  })
+
   test("adopts merge requests created or updated by glab on any host", () => {
     const url = "https://code.example.com/group/team/widget/-/merge_requests/12"
     assert.deepEqual(requestReferences("glab mr create --title test", `${url}\n${url}`), [

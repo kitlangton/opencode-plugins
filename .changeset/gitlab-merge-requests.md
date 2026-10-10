@@ -15,3 +15,5 @@ removed, without guessing a repository for numeric references.
 Recover all open requests from direct create/update commands with quoted or
 shell-generated descriptions, without evaluating shell code or adopting URLs
 from the description text.
+Recover successful GitLab API PUT updates from their JSON MR result, including
+identity and field-preserving jq projections, without adopting read-only API calls.

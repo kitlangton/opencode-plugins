@@ -74,12 +74,12 @@ const context = {
             { type: "tool", state: {
               status: "completed", input: { command: quotedOnly
                 ? "glab mr create --title 'Recovered child change' --description $'Details with \\'quotes\\' and \\nlines' --yes"
-                : "glab mr create --title 'Recovered child change'" },
-              content: [{ type: "text", text: pr.url }],
+                : "glab api projects/2/merge_requests/42 --method PUT -f description='Updated child change' | jq '{iid,web_url}'" },
+              content: [{ type: "text", text: quotedOnly ? pr.url : JSON.stringify({ iid: 42, web_url: pr.url }) }],
             } },
             { type: "tool", state: {
-              status: "completed", input: { command: "glab mr update 42 --description \"$(glab api projects/2/merge_requests/41 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"description\"])')\"" },
-              content: [{ type: "text", text: pr.url }],
+              status: "completed", input: { command: "glab api projects/2/merge_requests/42 --method PUT -f description='Another update'" },
+              content: [{ type: "text", text: JSON.stringify({ iid: 42, web_url: pr.url }) }],
             } },
             { type: "tool", state: {
               status: "completed", input: { command: "glab mr create --title 'Already merged'" },
